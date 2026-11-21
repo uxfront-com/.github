@@ -1,0 +1,44 @@
+name: Bug report
+description: Report something that doesn't work the way you expect.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting it. Please search the existing issues first, since someone may already have reported it. To report a vulnerability, follow the [security policy](https://github.com/uxfront-com/.github/blob/main/SECURITY.md) instead of opening an issue.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The package version, release or commit you're using, or the page's address for a website.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps that shows the problem. A link to a repository or a playground helps a lot.
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include any error messages, logs or screenshots.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Where it happens, like your operating system, runtime, browser and their versions.
