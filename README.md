@@ -6,21 +6,68 @@ GitHub applies these defaults because this repository is named `.github`. Read [
 
 ## Provided
 
-| File                                                    | What it does                                                                                     |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [`SECURITY.md`](SECURITY.md)                            | Tells people how to report a vulnerability privately, and what happens next.                     |
-| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)              | Contributor Covenant 3.0, with reports to `support@uxfront.com`.                                 |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md)                    | Walks contributors from an issue to a pull request, and points to each repository's own checks. |
-| [`pull_request_template.md`](pull_request_template.md)  | Fills in a new pull request with what changed, how it was checked and a short checklist.        |
-| [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/)    | A bug report form, a feature request form and a link to the contributing guide.                 |
+| File                                                             | What it does                                                                                                                           |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| [`SECURITY.md`](SECURITY.md)                                     | Tells people how to report a vulnerability privately, and what happens next.                                                           |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)                       | Contributor Covenant 3.0, with reports to `support@uxfront.com`.                                                                       |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md)                             | Walks contributors from an issue to a pull request, and points to each repository's own checks.                                        |
+| [`pull_request_template.md`](pull_request_template.md)           | Fills in a new pull request with what changed, how it was checked and a short checklist.                                               |
+| [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/)             | A bug report form, a feature request form and a link to the contributing guide.                                                        |
+| [`.github/workflows/release.yml`](.github/workflows/release.yml) | Versions and publishes a repository's packages with Changesets and npm trusted publishing. Read [Release workflow](#release-workflow). |
 
 ## Planned
 
 These shared pieces come later, each in its own pull request:
 
-- A reusable release workflow (planned).
 - A shared CI setup action (planned).
 - A shared `.editorconfig` (planned).
+
+## Release workflow
+
+The release workflow lets a repository version and publish its packages to npm without an npm token. On a push to `main`, it opens or updates the "Version Packages" pull request while changesets are pending. Once that pull request merges, it builds, packs and publishes the new versions, then tags them and creates GitHub releases. Only its `publish` job gets `id-token: write`, the permission npm's [trusted publishing](https://docs.npmjs.com/trusted-publishers) needs, so the build never runs next to the publish credential.
+
+A repository calls it from its own `.github/workflows/changesets.yml`:
+
+```yaml
+name: Changesets
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: changesets-${{ github.ref }}
+  cancel-in-progress: false
+permissions: {}
+jobs:
+  release:
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    uses: uxfront-com/.github/.github/workflows/release.yml@<40-char SHA> # main
+    with:
+      build: <the repository's build command>
+```
+
+The calling job must grant all three permissions, since a called workflow can only lower the permissions it gets, and npm needs `id-token: write` in both workflows. Keep `concurrency` in the caller too: a called workflow that uses the caller's group waits on itself.
+
+| Input               | Type    | Default                            | What it does                                                                                                |
+| ------------------- | ------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `build`             | string  | required                           | The command that builds the packages, like `pnpm turbo run build --filter='./packages/*'`.                  |
+| `node-version`      | string  | `''`                               | The Node.js version. When set, it wins over `node-version-file`.                                            |
+| `node-version-file` | string  | `.node-version`                    | The file to read the Node.js version from when `node-version` is empty.                                     |
+| `pnpm-version`      | string  | `''`                               | The pnpm version. Empty reads `packageManager` from `package.json`, and setting both fails the job.         |
+| `version-script`    | string  | `''`                               | The command that versions packages. Empty runs `changeset version`.                                         |
+| `commit-message`    | string  | `chore(release): version packages` | The commit message of the "Version Packages" pull request.                                                  |
+| `pr-title`          | string  | `chore(release): version packages` | The title of the "Version Packages" pull request.                                                           |
+| `publish`           | boolean | `true`                             | With `false`, the workflow only opens or updates the "Version Packages" pull request and publishes nothing. |
+
+Two rules keep releases working:
+
+- **Keep the filename.** npm's trusted publisher checks the calling workflow's filename, not this one, so keep `changesets.yml` as it is. Renaming or moving it revokes the publish credential, and the release then fails with a misleading E404.
+- **Pin the full SHA.** Point `uses:` at the full 40-character SHA of a commit on this repository's `main`, with a `# main` comment, never at a branch or a tag. That way a change here reaches a repository only when it moves its pin.
+
+The publish job also checks that npm is 11.5.1 or later, which trusted publishing needs. It installs nothing, so if the check fails, move the repository to a Node.js release that bundles a newer npm.
 
 ## How defaults apply
 
