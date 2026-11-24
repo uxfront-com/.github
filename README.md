@@ -6,13 +6,14 @@ GitHub applies these defaults because this repository is named `.github`. Read [
 
 ## Provided
 
-| File                                                    | What it does                                                                                     |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [`SECURITY.md`](SECURITY.md)                            | Tells people how to report a vulnerability privately, and what happens next.                     |
-| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)              | Contributor Covenant 3.0, with reports to `support@uxfront.com`.                                 |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md)                    | Walks contributors from an issue to a pull request, and points to each repository's own checks. |
-| [`pull_request_template.md`](pull_request_template.md)  | Fills in a new pull request with what changed, how it was checked and a short checklist.        |
-| [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/)    | A bug report form, a feature request form and a link to the contributing guide.                 |
+| File                                                   | What it does                                                                                                                                                                                                                                               |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`SECURITY.md`](SECURITY.md)                           | Tells people how to report a vulnerability privately, and what happens next.                                                                                                                                                                               |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)             | Contributor Covenant 3.0, with reports to `support@uxfront.com`.                                                                                                                                                                                           |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md)                   | Walks contributors from an issue to a pull request, and points to each repository's own checks.                                                                                                                                                            |
+| [`pull_request_template.md`](pull_request_template.md) | Fills in a new pull request with what changed, how it was checked and a short checklist.                                                                                                                                                                   |
+| [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/)   | A bug report form, a feature request form and a link to the contributing guide.                                                                                                                                                                            |
+| [`.editorconfig`](.editorconfig)                       | Sets the whitespace rules editors follow: two spaces, LF, UTF-8 and a final newline, matching `@uxfront/oxfmt-config`. EditorConfig has no `extends`, so each repository keeps an exact copy. Styleframe keeps its own until it moves to the shared style. |
 
 ## Planned
 
@@ -20,7 +21,6 @@ These shared pieces come later, each in its own pull request:
 
 - A reusable release workflow (planned).
 - A shared CI setup action (planned).
-- A shared `.editorconfig` (planned).
 
 ## How defaults apply
 
