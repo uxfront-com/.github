@@ -1,0 +1,265 @@
+# The shared release workflow for uxfront-com repositories. Each repository
+# calls it from its own `.github/workflows/changesets.yml`, pinned to the full
+# SHA of a commit on this repository's main branch.
+#
+# The npm trusted publisher of a package names the calling workflow's exact
+# filename, not this file. So each caller keeps its own `changesets.yml`
+# filename. Renaming or moving it revokes the publish credential, and the
+# release then fails with a misleading E404.
+#
+# The caller's job must grant `contents: write`, `pull-requests: write` and
+# `id-token: write`. A called workflow can only lower the permissions it gets,
+# and npm needs `id-token: write` in both. This workflow passes `id-token:
+# write` on only to the `publish` job. The caller also keeps the concurrency
+# group, since a called workflow that uses the caller's group waits on itself.
+# The caller's shape:
+#
+#   name: Changesets
+#   on:
+#     push:
+#       branches: [main]
+#     workflow_dispatch:
+#   concurrency:
+#     group: changesets-${{ github.ref }}
+#     cancel-in-progress: false
+#   permissions: {}
+#   jobs:
+#     release:
+#       permissions:
+#         contents: write
+#         pull-requests: write
+#         id-token: write
+#       uses: uxfront-com/.github/.github/workflows/release.yml@<40-char SHA> # main
+#       with:
+#         build: <the repository's build command>
+#
+# On a push to main:
+#   - pending changesets -> open/update the "Version Packages" PR, publish nothing
+#   - no changesets and unpublished versions -> pack, publish, tag, release
+#   - otherwise -> do nothing
+#
+# Split into sub-actions (changesets/action v2) so `id-token: write` exists only
+# on the job that talks to npm.
+name: Changesets
+
+on:
+  workflow_call:
+    inputs:
+      build:
+        description: The command that builds the packages to publish, run in the `pack` job.
+        type: string
+        required: true
+      node-version:
+        description: The Node.js version to use. When set, it wins over `node-version-file`.
+        type: string
+        default: ""
+      node-version-file:
+        description: The file to read the Node.js version from, used when `node-version` is empty.
+        type: string
+        default: .node-version
+      pnpm-version:
+        description: The pnpm version to install. Empty reads `packageManager` from package.json.
+        type: string
+        default: ""
+      version-script:
+        description: The command that versions packages. Empty runs `changeset version`.
+        type: string
+        default: ""
+      commit-message:
+        description: The commit message of the "Version Packages" PR.
+        type: string
+        default: "chore(release): version packages"
+      pr-title:
+        description: The title of the "Version Packages" PR.
+        type: string
+        default: "chore(release): version packages"
+      publish:
+        description: Whether to pack and publish. With false, the workflow only opens or updates the "Version Packages" PR.
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  # Every other job needs this one, so this guard is the only one required.
+  # npm trusted publishing does not restrict by branch: without it, a manual
+  # dispatch on an unreviewed branch could publish that branch to npm.
+  # In a called workflow, `github.ref` is the caller's ref.
+  select-mode:
+    name: Select mode
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.select-mode.outputs.mode }}
+      publish-plan-artifact-id: ${{ steps.select-mode.outputs.publish-plan-artifact-id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ inputs.node-version == '' && inputs.node-version-file || '' }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Select mode
+        id: select-mode
+        uses: changesets/action/select-mode@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+
+  version:
+    name: Version packages
+    needs: select-mode
+    if: needs.select-mode.outputs.mode == 'version'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # the version commit on the release branch
+      pull-requests: write # the "Version Packages" PR
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ inputs.node-version == '' && inputs.node-version-file || '' }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Open or update the "Version Packages" PR
+        uses: changesets/action/version@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          script: ${{ inputs.version-script }}
+          commit-message: ${{ inputs.commit-message }}
+          pr-title: ${{ inputs.pr-title }}
+
+  # Builds and packs with no write access at all. The tarballs are handed to
+  # `publish` as an artifact, so nothing that runs during the build ever sees
+  # the npm credential.
+  pack:
+    name: Pack packages
+    needs: select-mode
+    if: inputs.publish && needs.select-mode.outputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      pack-dir-artifact-id: ${{ steps.pack.outputs.pack-dir-artifact-id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ inputs.node-version == '' && inputs.node-version-file || '' }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The command comes in through the environment, not the script text, so
+      # the caller's input is never expanded into the script.
+      - name: Build packages
+        env:
+          BUILD: ${{ inputs.build }}
+        run: bash --noprofile --norc -eo pipefail -c "$BUILD"
+
+      - name: Pack
+        id: pack
+        uses: changesets/action/pack@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          publish-plan-artifact-id: ${{ needs.select-mode.outputs.publish-plan-artifact-id }}
+
+  publish:
+    name: Publish to npm
+    needs: pack
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # git tags and GitHub releases
+      id-token: write # npm trusted publishing (OIDC)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # v6+ is required: older releases broke OIDC publishing under pnpm 11
+      # with an E404 that reads like a missing package (pnpm#11513, pnpm#11566).
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      # No NODE_AUTH_TOKEN, on purpose. Trusted publishing mints a short-lived
+      # credential from the OIDC token above; there is no npm token to leak.
+      # No `registry-url` either: it makes setup-node write a placeholder
+      # NODE_AUTH_TOKEN into .npmrc, which `pnpm publish` could send instead of
+      # doing the OIDC exchange. npmjs is already the default registry.
+      # No dependency cache: this job holds the credential, so it restores
+      # nothing another job could have written.
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ inputs.node-version == '' && inputs.node-version-file || '' }}
+
+      # Only the Changesets CLI is needed here; the tarballs were built in
+      # `pack`. Skipping lifecycle scripts keeps dependency code from running
+      # next to the OIDC token.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # npm trusted publishing needs npm 11.5.1 or later. pnpm 10 hands
+      # `pnpm publish` to the npm CLI, and an older npm fails the OIDC exchange
+      # with a misleading E404. This step installs nothing: raise the Node.js
+      # version instead, since it brings its own npm.
+      - name: Check the npm version
+        run: |
+          required=11.5.1
+          current="$(npm --version)"
+          if [ "$(printf '%s\n%s\n' "$required" "$current" | sort -V | head -n 1)" != "$required" ]; then
+            echo "::error::npm trusted publishing needs npm $required or later, and this job has npm $current. Use a Node.js version that ships npm $required or later."
+            exit 1
+          fi
+
+      - name: Publish, tag and release
+        uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          pack-dir-artifact-id: ${{ needs.pack.outputs.pack-dir-artifact-id }}
