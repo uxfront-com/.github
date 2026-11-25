@@ -1,0 +1,224 @@
+# The shared Lighthouse workflow for uxfront-com repositories. Each repository
+# calls it from its own `.github/workflows/lighthouse.yml`, on a nightly
+# schedule, pinned to the full SHA of a commit on this repository's main branch.
+#
+# The caller's job must grant `actions: read` and `contents: read`. A called
+# workflow can only lower the permissions it gets: the `changes` job needs
+# `actions: read` to read earlier runs, and the `audit` job needs
+# `contents: read` to check out the code. The caller also keeps the
+# concurrency group, since a called workflow that uses the caller's group
+# waits on itself. The caller's shape:
+#
+#   name: Lighthouse
+#   on:
+#     schedule:
+#       - cron: "<minute> <hour> * * *"
+#     workflow_dispatch:
+#     # Tests the caller itself, and each later pin bump, before it merges.
+#     pull_request:
+#       paths: [.github/workflows/lighthouse.yml]
+#   concurrency:
+#     group: lighthouse-${{ github.ref }}
+#     cancel-in-progress: false
+#   permissions: {}
+#   jobs:
+#     lighthouse:
+#       name: Lighthouse
+#       permissions:
+#         actions: read # the change check reads earlier runs
+#         contents: read
+#       uses: uxfront-com/.github/.github/workflows/lighthouse.yml@<40-char SHA> # main
+#       with:
+#         build: <the repository's build command>
+#         audit: <the repository's audit command>
+#         reports: <the report directory>
+#
+# The change check: only a scheduled run can skip. It finds the caller's
+# workflow, walks back through its completed runs on the same branch, newest
+# first, and stops at the first one whose `Audit` job concluded `success`,
+# `failure` or `timed_out`. A skipped or cancelled audit doesn't count, so it
+# runs again the next night. A scheduled run skips the audit only when the
+# branch is still at the commit that run audited. Every other event audits.
+# A failed lookup fails the run, never turns into a skip.
+name: Lighthouse
+
+on:
+  workflow_call:
+    inputs:
+      install:
+        description: The command that installs dependencies. Empty skips the step.
+        type: string
+        default: pnpm install --frozen-lockfile
+      build:
+        description: The command that builds the site. Empty skips the step.
+        type: string
+        default: ""
+      audit:
+        description: The command that runs Lighthouse and exits non-zero when it fails. It runs from the repository root, so it can `cd`.
+        type: string
+        required: true
+      reports:
+        description: The path to upload as the `lighthouse-reports` artifact.
+        type: string
+        default: .lighthouseci
+      node-version:
+        description: The Node.js version to use. When set, it wins over `node-version-file`.
+        type: string
+        default: ""
+      node-version-file:
+        description: The file to read the Node.js version from, used when `node-version` is empty.
+        type: string
+        default: .node-version
+      pnpm-version:
+        description: The pnpm version to install. Empty reads `packageManager` from package.json.
+        type: string
+        default: ""
+      timeout-minutes:
+        description: The timeout of the `Audit` job, in minutes.
+        type: number
+        default: 30
+
+permissions: {}
+
+jobs:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read # the run history of the caller's workflow
+    outputs:
+      audit: ${{ steps.decide.outputs.audit }}
+    steps:
+      # Everything comes in through the environment, so the script runs
+      # unchanged outside Actions. In a called workflow, `github.run_id` and
+      # `github.event_name` are the caller's. On a pull request, `head_ref` is
+      # the branch its runs are listed under, where `ref_name` is `<n>/merge`.
+      - name: Decide whether to audit
+        id: decide
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          workflow_id="$(gh api "repos/$REPOSITORY/actions/runs/$RUN_ID" --jq .workflow_id)"
+
+          # Newest first. The current run is still in progress, so
+          # `status=completed` already leaves it out. Read into a variable,
+          # so a failed lookup fails the step.
+          runs="$(gh api --method GET "repos/$REPOSITORY/actions/workflows/$workflow_id/runs" \
+            -f branch="$BRANCH" -f status=completed -F per_page=100 \
+            --jq '.workflow_runs[] | [.id, .head_sha, .html_url] | @tsv')"
+
+          last_sha=""
+          last_url=""
+          last_conclusion=""
+          while IFS=$'\t' read -r id head_sha url; do
+            if [ -z "$id" ] || [ "$id" = "$RUN_ID" ]; then
+              continue
+            fi
+            # A caller's run names the job `<caller job> / Audit`.
+            conclusion="$(gh api --method GET "repos/$REPOSITORY/actions/runs/$id/jobs" \
+              -f filter=latest -F per_page=100 \
+              --jq '[.jobs[] | select(.name == "Audit" or (.name | endswith(" / Audit"))) | .conclusion | select(. == "success" or . == "failure" or . == "timed_out")] | first // empty')"
+            if [ -n "$conclusion" ]; then
+              last_sha="$head_sha"
+              last_url="$url"
+              last_conclusion="$conclusion"
+              break
+            fi
+          done <<< "$runs"
+
+          if [ "$EVENT" != "schedule" ]; then
+            audit=true
+            reason="\`$EVENT\` always audits."
+          elif [ -z "$last_sha" ]; then
+            audit=true
+            reason="no earlier audit on \`$BRANCH\`."
+          elif [ "$last_sha" != "$SHA" ]; then
+            audit=true
+            reason="\`$BRANCH\` moved from \`${last_sha:0:7}\` to \`${SHA:0:7}\` since run $last_url."
+          else
+            audit=false
+            reason="\`$BRANCH\` is still at \`${SHA:0:7}\`, which run $last_url audited (\`$last_conclusion\`)."
+          fi
+
+          if [ "$audit" = true ]; then
+            decision="Ran the Lighthouse audit: $reason"
+          else
+            decision="Skipped the Lighthouse audit: $reason"
+          fi
+          if [ -n "$last_sha" ]; then
+            last="The last audit on \`$BRANCH\` was run $last_url, at \`${last_sha:0:7}\` (\`$last_conclusion\`)."
+          else
+            last="No earlier audit on \`$BRANCH\` in its last 100 completed runs."
+          fi
+
+          echo "$decision"
+          echo "$last"
+          printf '## Lighthouse\n\n%s\n\n%s\n' "$decision" "$last" >> "$GITHUB_STEP_SUMMARY"
+          echo "audit=$audit" >> "$GITHUB_OUTPUT"
+
+  audit:
+    name: Audit
+    needs: changes
+    if: needs.changes.outputs.audit == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      # No dependency cache without an install: there is no lockfile to key it.
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ inputs.node-version == '' && inputs.node-version-file || '' }}
+          cache: ${{ inputs.install != '' && 'pnpm' || '' }}
+
+      # Each command comes in through the environment, not the script text, so
+      # the caller's input is never expanded into the script.
+      - name: Install dependencies
+        if: inputs.install != ''
+        env:
+          INSTALL: ${{ inputs.install }}
+        run: bash --noprofile --norc -eo pipefail -c "$INSTALL"
+
+      - name: Build
+        if: inputs.build != ''
+        env:
+          BUILD: ${{ inputs.build }}
+        run: bash --noprofile --norc -eo pipefail -c "$BUILD"
+
+      - name: Audit
+        id: audit
+        env:
+          AUDIT: ${{ inputs.audit }}
+        run: bash --noprofile --norc -eo pipefail -c "$AUDIT"
+
+      # Uploads after a failed audit too, so its reports show why.
+      - name: Upload the Lighthouse reports
+        if: ${{ !cancelled() && steps.audit.conclusion != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lighthouse-reports
+          path: ${{ inputs.reports }}
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

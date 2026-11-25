@@ -1,0 +1,28 @@
+# Tests the shared Lighthouse workflow on each pull request that changes it,
+# by calling this branch's own copy against a small fixture page. This
+# repository has no package.json, `.node-version` or lockfile, so the inputs
+# below also cover the version inputs and an empty install.
+name: Lighthouse self-test
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/lighthouse.yml
+      - .github/workflows/lighthouse-test.yml
+      - test/lighthouse/**
+
+permissions: {}
+
+jobs:
+  lighthouse:
+    name: Lighthouse self-test
+    permissions:
+      actions: read # the change check reads earlier runs
+      contents: read
+    uses: ./.github/workflows/lighthouse.yml
+    with:
+      install: ""
+      node-version: "24"
+      pnpm-version: "11.25.0"
+      audit: pnpm dlx @lhci/cli@0.16.1 autorun --config=test/lighthouse/lighthouserc.json
+      reports: .lighthouseci
