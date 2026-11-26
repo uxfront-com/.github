@@ -15,13 +15,8 @@ GitHub applies these defaults because this repository is named `.github`. Read [
 | [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/)                   | A bug report form, a feature request form and a link to the contributing guide.                                                                                                                                                                                                                                                                        |
 | [`.github/workflows/release.yml`](.github/workflows/release.yml)       | Versions and publishes a repository's packages with Changesets and npm trusted publishing. Read [Release workflow](#release-workflow).                                                                                                                                                                                                                 |
 | [`.github/workflows/lighthouse.yml`](.github/workflows/lighthouse.yml) | Runs Lighthouse on a repository's site each night, and only when `main` has moved since the last audit. Read [Lighthouse workflow](#lighthouse-workflow).                                                                                                                                                                                              |
+| [`.github/actions/setup/`](.github/actions/setup/)                     | Sets up pnpm and Node.js, restores the pnpm store and installs a repository's dependencies in one CI step. Read [Setup action](#setup-action).                                                                                                                                                                                                         |
 | [`.editorconfig`](.editorconfig)                                       | Sets the whitespace rules editors follow: tabs with no fixed width, so each reader picks their own, and two spaces for YAML. Also LF, UTF-8 and a final newline. It matches `@uxfront/oxfmt-config` 0.2 and later. EditorConfig has no `extends`, so each repository keeps an exact copy. Styleframe keeps its own until it moves to the shared style. |
-
-## Planned
-
-These shared pieces come later, each in its own pull request:
-
-- A shared CI setup action (planned).
 
 ## Release workflow
 
@@ -135,6 +130,37 @@ The check looks back at most 100 completed runs, so after 100 skipped nights in 
 Keep in mind who hears about a failed night: GitHub sends the [notification for a scheduled run](https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule) to whoever last changed the cron line in the caller. To receive them yourself, be the last one to change it.
 
 `lighthouse-test.yml` tests this workflow on each pull request that changes it. It calls the pull request's own copy against the fixture page in `test/lighthouse/`, which must score at least 0.9 in every category. This repository has no `package.json` or `.node-version`, so the self-test also passes the Node.js and pnpm versions and an empty `install`.
+
+## Setup action
+
+The setup action gives every CI job one step that sets up pnpm and Node.js, restores the pnpm store and installs the dependencies. Without it, each job repeats the same three or four steps, and their pins and options drift apart between jobs and repositories. It reads the pnpm version from `packageManager` in `package.json` and the Node.js version from `.node-version`, so a repository keeps both in one place.
+
+A job calls it right after its own checkout:
+
+```yaml
+steps:
+  - name: Checkout
+    uses: actions/checkout@<40-char SHA> # vX
+  - name: Setup
+    uses: uxfront-com/.github/.github/actions/setup@<40-char SHA> # main
+    # with:                      # only where the job needs it
+    #   filter: "@uxfront/testlane"
+    #   node-version: ${{ matrix.node-version }}
+```
+
+Keep the checkout first and in the job, since the action reads `.node-version`, `package.json` and `pnpm-lock.yaml` from it, and each job picks its own checkout options, like `fetch-depth: 0`. Pin the full SHA with a `# main` comment, as for the release workflow. The action is read from here at run time, so this repository must stay public, or every caller's `Setup` step fails.
+
+| Input               | Default         | What it does                                                                                                                      |
+| ------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `filter`            | `''`            | One pnpm filter selector, like `@uxfront/testlane`. When set, the install runs with `--filter` and only installs what it selects. |
+| `node-version`      | `''`            | The Node.js version, like `22` for a matrix leg. When set, it wins over `node-version-file`.                                      |
+| `node-version-file` | `.node-version` | The file to read the Node.js version from when `node-version` is empty.                                                           |
+
+The install always runs `pnpm install --frozen-lockfile`, so a lockfile that doesn't match `package.json` fails the job. The filter comes in through an environment variable rather than the script text, so the caller's input is never expanded into the script.
+
+The pnpm store is cached once a week, per runner OS and architecture and per filter. A job restores its own store when the lockfile matches, and otherwise the newest store from the same week, so pnpm downloads only the difference. Each week starts from a cold install, which keeps old packages from piling up in the store.
+
+`setup-test.yml` tests the action on each pull request that changes it. It copies the pnpm workspace in `test/setup/` to the repository root and calls the pull request's own copy three times: with no inputs, with a `filter` and with a `node-version`, each followed by a check of the Node.js and pnpm versions and the installed packages. Dependabot keeps the action's pins current, since `.github/dependabot.yml` covers `.github/actions/*`.
 
 ## How defaults apply
 

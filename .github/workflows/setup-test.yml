@@ -1,0 +1,81 @@
+# Tests the shared setup action on each pull request that changes it, by calling
+# this branch's own copy on a small pnpm workspace. This repository has no
+# package.json, `.node-version` or lockfile, so each leg copies the fixture in
+# test/setup/ to the workspace root first.
+name: Setup self-test
+
+on:
+  pull_request:
+    paths:
+      - .github/actions/setup/**
+      - .github/workflows/setup-test.yml
+      - test/setup/**
+
+permissions: {}
+
+jobs:
+  setup:
+    name: Setup self-test (${{ matrix.leg }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: default
+            filter: ""
+            node-version: ""
+          - leg: filter
+            filter: setup-fixture-a
+            node-version: ""
+          - leg: node-version
+            filter: ""
+            node-version: "22"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Copy the fixture
+        run: cp -R test/setup/. .
+
+      - name: Setup
+        uses: ./.github/actions/setup
+        with:
+          filter: ${{ matrix.filter }}
+          node-version: ${{ matrix.node-version }}
+
+      - name: Check the setup
+        env:
+          LEG: ${{ matrix.leg }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          node=$(node --version)
+          pnpm=$(pnpm --version)
+          echo "node $node, pnpm $pnpm"
+          [ "$pnpm" = "11.25.0" ] || fail "pnpm is $pnpm, not 11.25.0 from packageManager"
+
+          case "$LEG" in
+            default)
+              [[ "$node" == v24.* ]] || fail "node is $node, not v24 from .node-version"
+              [ -d packages/a/node_modules/ms ] || fail "packages/a has no ms"
+              [ -d packages/b/node_modules/kleur ] || fail "packages/b has no kleur"
+              ;;
+            filter)
+              [[ "$node" == v24.* ]] || fail "node is $node, not v24 from .node-version"
+              [ -d packages/a/node_modules/ms ] || fail "packages/a has no ms"
+              [ ! -e packages/b/node_modules/kleur ] || fail "packages/b has kleur, which the filter leaves out"
+              ;;
+            node-version)
+              [[ "$node" == v22.* ]] || fail "node is $node, not v22 from the node-version input"
+              ;;
+            *)
+              fail "unknown leg $LEG"
+              ;;
+          esac
+          echo "The $LEG leg passed."
