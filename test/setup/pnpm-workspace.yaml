@@ -1,0 +1,3 @@
+# A small pnpm workspace that the setup self-test installs.
+packages:
+  - packages/*

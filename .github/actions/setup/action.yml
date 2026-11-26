@@ -1,0 +1,79 @@
+name: Setup
+description: Sets up pnpm and Node.js, restores the pnpm store and installs the dependencies.
+
+# The shared setup step for every uxfront-com repository. A job calls it right after its own
+# checkout, which must come first, since the action reads .node-version, package.json and
+# pnpm-lock.yaml from it. Pin the full SHA of a commit on this repository's main, with a
+# `# main` comment, never a branch or a tag. Callers read it from here, so this repository
+# must stay public.
+inputs:
+  filter:
+    description: One pnpm filter selector. When set, only the packages it selects are installed.
+    required: false
+    default: ""
+  node-version:
+    description: The Node.js version. When set, it wins over node-version-file.
+    required: false
+    default: ""
+  node-version-file:
+    description: The file to read the Node.js version from when node-version is empty.
+    required: false
+    default: .node-version
+
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm
+      uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+    - name: Setup Node.js
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        node-version-file: ${{ inputs.node-version == '' && inputs.node-version-file || '' }}
+
+    # The scope keeps jobs that install different packages on different exact keys, so they
+    # don't race to save one. The filter comes in through the environment, not the script text.
+    - name: Locate the pnpm store
+      id: pnpm-store
+      shell: bash
+      env:
+        FILTER: ${{ inputs.filter }}
+      run: |
+        echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+        if [ -n "$FILTER" ]; then
+          hash=$(printf '%s' "$FILTER" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-12)
+          echo "scope=filter-$hash" >> "$GITHUB_OUTPUT"
+        else
+          echo "scope=all" >> "$GITHUB_OUTPUT"
+        fi
+
+    # The dependency cache, with a fallback. setup-node's pnpm cache restores only the exact
+    # lockfile key, and a PR whose lockfile differs from main's, like a part on an integration
+    # branch, finds no such key in a scope it can read, so it downloaded every package. The
+    # restore keys fall back to the newest store of the same scope, then of any scope, and pnpm
+    # downloads only the difference.
+    # `pnpm install` never removes a package from the store, so a restored store keeps older
+    # lockfiles' packages. The ISO week in the key limits that: a fallback reaches only a store
+    # from the same week, and each week starts from a cold install. A store prune can't do it,
+    # since it deletes the packages pnpm copies rather than links, like esbuild.
+    - name: Restore the pnpm store
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: node-cache-${{ runner.os }}-${{ runner.arch }}-pnpm-${{ steps.pnpm-store.outputs.week }}-${{ steps.pnpm-store.outputs.scope }}-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: |
+          node-cache-${{ runner.os }}-${{ runner.arch }}-pnpm-${{ steps.pnpm-store.outputs.week }}-${{ steps.pnpm-store.outputs.scope }}-
+          node-cache-${{ runner.os }}-${{ runner.arch }}-pnpm-${{ steps.pnpm-store.outputs.week }}-
+
+    - name: Install dependencies
+      shell: bash
+      env:
+        FILTER: ${{ inputs.filter }}
+      run: |
+        if [ -n "$FILTER" ]; then
+          pnpm install --frozen-lockfile --filter "$FILTER"
+        else
+          pnpm install --frozen-lockfile
+        fi
