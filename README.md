@@ -6,15 +6,16 @@ GitHub applies these defaults because this repository is named `.github`. Read [
 
 ## Provided
 
-| File                                                             | What it does                                                                                                                                                                                                                                                                                                                                           |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`SECURITY.md`](SECURITY.md)                                     | Tells people how to report a vulnerability privately, and what happens next.                                                                                                                                                                                                                                                                           |
-| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)                       | Contributor Covenant 3.0, with reports to `support@uxfront.com`.                                                                                                                                                                                                                                                                                       |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md)                             | Walks contributors from an issue to a pull request, and points to each repository's own checks.                                                                                                                                                                                                                                                        |
-| [`pull_request_template.md`](pull_request_template.md)           | Fills in a new pull request with what changed, how it was checked and a short checklist.                                                                                                                                                                                                                                                               |
-| [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/)             | A bug report form, a feature request form and a link to the contributing guide.                                                                                                                                                                                                                                                                        |
-| [`.github/workflows/release.yml`](.github/workflows/release.yml) | Versions and publishes a repository's packages with Changesets and npm trusted publishing. Read [Release workflow](#release-workflow).                                                                                                                                                                                                                 |
-| [`.editorconfig`](.editorconfig)                                 | Sets the whitespace rules editors follow: tabs with no fixed width, so each reader picks their own, and two spaces for YAML. Also LF, UTF-8 and a final newline. It matches `@uxfront/oxfmt-config` 0.2 and later. EditorConfig has no `extends`, so each repository keeps an exact copy. Styleframe keeps its own until it moves to the shared style. |
+| File                                                                   | What it does                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`SECURITY.md`](SECURITY.md)                                           | Tells people how to report a vulnerability privately, and what happens next.                                                                                                                                                                                                                                                                           |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)                             | Contributor Covenant 3.0, with reports to `support@uxfront.com`.                                                                                                                                                                                                                                                                                       |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md)                                   | Walks contributors from an issue to a pull request, and points to each repository's own checks.                                                                                                                                                                                                                                                        |
+| [`pull_request_template.md`](pull_request_template.md)                 | Fills in a new pull request with what changed, how it was checked and a short checklist.                                                                                                                                                                                                                                                               |
+| [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/)                   | A bug report form, a feature request form and a link to the contributing guide.                                                                                                                                                                                                                                                                        |
+| [`.github/workflows/release.yml`](.github/workflows/release.yml)       | Versions and publishes a repository's packages with Changesets and npm trusted publishing. Read [Release workflow](#release-workflow).                                                                                                                                                                                                                 |
+| [`.github/workflows/lighthouse.yml`](.github/workflows/lighthouse.yml) | Runs Lighthouse on a repository's site each night, and only when `main` has moved since the last audit. Read [Lighthouse workflow](#lighthouse-workflow).                                                                                                                                                                                              |
+| [`.editorconfig`](.editorconfig)                                       | Sets the whitespace rules editors follow: tabs with no fixed width, so each reader picks their own, and two spaces for YAML. Also LF, UTF-8 and a final newline. It matches `@uxfront/oxfmt-config` 0.2 and later. EditorConfig has no `extends`, so each repository keeps an exact copy. Styleframe keeps its own until it moves to the shared style. |
 
 ## Planned
 
@@ -68,6 +69,72 @@ Two rules keep releases working:
 - **Pin the full SHA.** Point `uses:` at the full 40-character SHA of a commit on this repository's `main`, with a `# main` comment, never at a branch or a tag. That way a change here reaches a repository only when it moves its pin.
 
 The publish job also checks that npm is 11.5.1 or later, which trusted publishing needs. It installs nothing, so if the check fails, move the repository to a Node.js release that bundles a newer npm.
+
+## Lighthouse workflow
+
+The Lighthouse workflow audits a repository's site once a night, and only when `main` has moved since the last audit. Running Lighthouse on every pull request slows each one down, while a nightly run that skips an unchanged branch costs almost nothing on a quiet day. When it audits, it installs, builds and runs the repository's own Lighthouse command, then uploads the reports as the `lighthouse-reports` artifact for 14 days. A failed audit fails the run.
+
+A repository calls it from its own `.github/workflows/lighthouse.yml`:
+
+```yaml
+name: Lighthouse
+
+on:
+  schedule:
+    - cron: "<minute> <hour> * * *"
+  workflow_dispatch:
+  # Tests the caller itself, and each later pin bump, before it merges.
+  pull_request:
+    paths: [.github/workflows/lighthouse.yml]
+
+concurrency:
+  group: lighthouse-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  lighthouse:
+    name: Lighthouse
+    permissions:
+      actions: read # the change check reads earlier runs
+      contents: read
+    uses: uxfront-com/.github/.github/workflows/lighthouse.yml@<40-char SHA> # main
+    with:
+      build: <the repository's build command>
+      audit: <the repository's audit command>
+      reports: <the report directory>
+```
+
+The `pull_request` trigger only fires for a pull request that changes the caller itself, like the one that adds it or moves its pin, so each change to it runs once before it merges. No other pull request runs Lighthouse. Pin the full SHA with a `# main` comment, as for the release workflow.
+
+The calling job must grant `actions: read`, since the change check reads the workflow's earlier runs, and `contents: read`, since the audit checks out the code. A called workflow can only lower the permissions it gets. Keep `concurrency` in the caller too, for the same reason as the release workflow.
+
+| Input               | Type   | Default                          | What it does                                                                                                         |
+| ------------------- | ------ | -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `install`           | string | `pnpm install --frozen-lockfile` | The command that installs dependencies. Empty skips the step.                                                        |
+| `build`             | string | `''`                             | The command that builds the site. Empty skips the step.                                                              |
+| `audit`             | string | required                         | The command that runs Lighthouse and exits non-zero when it fails. It runs from the repository root, so it can `cd`. |
+| `reports`           | string | `.lighthouseci`                  | The path to upload as the `lighthouse-reports` artifact.                                                             |
+| `node-version`      | string | `''`                             | The Node.js version. When set, it wins over `node-version-file`.                                                     |
+| `node-version-file` | string | `.node-version`                  | The file to read the Node.js version from when `node-version` is empty.                                              |
+| `pnpm-version`      | string | `''`                             | The pnpm version. Empty reads `packageManager` from `package.json`, and setting both fails the job.                  |
+| `timeout-minutes`   | number | `30`                             | The timeout of the `Audit` job, in minutes. Raise it for a site whose build takes longer.                            |
+
+Each command runs in Bash, from an environment variable rather than the script text, so the caller's input is never expanded into the script.
+
+The `Changes` job decides whether the `Audit` job runs, and writes its decision and the reason to the run's summary:
+
+- **A scheduled run audits only when the branch moved.** It looks back through the workflow's completed runs on the same branch, newest first, for the last one whose `Audit` job passed, failed or timed out. When the branch is still at that run's commit, it skips the audit and the run stays green.
+- **Every other run audits.** A manual run from the **Actions** tab, or a pull request run, always audits.
+- **A skipped or cancelled audit doesn't count**, so a cancelled audit runs again the next night.
+- **A failed lookup fails the run.** When the history can't be read, like without `actions: read`, the run goes red instead of skipping.
+
+The check looks back at most 100 completed runs, so after 100 skipped nights in a row it audits the same commit again. GitHub can delay or drop a scheduled run when it's busy, and the next night catches up, since the check compares against the last audit rather than the last night.
+
+Keep in mind who hears about a failed night: GitHub sends the [notification for a scheduled run](https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule) to whoever last changed the cron line in the caller. To receive them yourself, be the last one to change it.
+
+`lighthouse-test.yml` tests this workflow on each pull request that changes it. It calls the pull request's own copy against the fixture page in `test/lighthouse/`, which must score at least 0.9 in every category. This repository has no `package.json` or `.node-version`, so the self-test also passes the Node.js and pnpm versions and an empty `install`.
 
 ## How defaults apply
 
