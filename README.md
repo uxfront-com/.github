@@ -1,6 +1,6 @@
 # uxfront-com/.github
 
-This repository holds the public defaults for every repository in the uxfront-com organisation. It gives each repository a security policy, a code of conduct, a contributing guide and issue and pull request templates, unless the repository has its own. It's also the one place that says which repository takes which file from here.
+This repository holds the public defaults for every repository in the uxfront-com organisation. It gives each repository a security policy, a code of conduct, a contributing guide and issue and pull request templates, unless the repository has its own. It's also the one place that says which repository takes which file from here, and it holds the [vision](#vision) of how the UXFront projects connect.
 
 GitHub applies these defaults because this repository is named `.github`. Read [GitHub's guide to default community health files](https://docs.github.com/en/communities/setting-up-your-project-for-healthy-contributions/creating-a-default-community-health-file) for the full rules.
 
@@ -17,6 +17,10 @@ GitHub applies these defaults because this repository is named `.github`. Read [
 | [`.github/workflows/lighthouse.yml`](.github/workflows/lighthouse.yml) | Runs Lighthouse on a repository's site each night, and only when `main` has moved since the last audit. Read [Lighthouse workflow](#lighthouse-workflow).                                                                                                                                 |
 | [`.github/actions/setup/`](.github/actions/setup/)                     | Sets up pnpm and Node.js, restores the pnpm store and installs a repository's dependencies in one CI step. Read [Setup action](#setup-action).                                                                                                                                            |
 | [`.editorconfig`](.editorconfig)                                       | Sets the whitespace rules editors follow: tabs with no fixed width, so each reader picks their own, and two spaces for YAML. Also LF, UTF-8 and a final newline. It matches `@uxfront/oxfmt-config` 0.2 and later. EditorConfig has no `extends`, so each repository keeps an exact copy. |
+
+## Vision
+
+[`VISION.md`](VISION.md) says how UXFront, Open Components, Unframework, Styleframe and Inkline fit together: the question each project answers, the order a component travels through them and what each project's docs keep, link to and embed. It lives here so that every project's README and agent guide can link to one public copy. GitHub doesn't apply it to other repositories, since it isn't a community health file.
 
 ## Release workflow
 
